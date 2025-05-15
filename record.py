@@ -6,5 +6,5 @@ fs = 16000
 print("🎤 กำลังอัดเสียง...")
 recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
 sd.wait()
-write("sample.wav", fs, recording)
-print("✅ บันทึก sample.wav สำเร็จ")
+write("test.wav", fs, recording)
+print("✅ บันทึก .wav สำเร็จ")

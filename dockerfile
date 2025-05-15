@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y ffmpeg git gcc portaudio19-dev libsndfi
 
 # ติดตั้งไลบรารี
 RUN pip install --upgrade pip
-RUN pip install faster-whisper vosk scipy sounddevice numpy jiwer
+RUN pip install faster-whisper vosk scipy sounddevice numpy jiwer psutil
 
 # เตรียม working dir
 WORKDIR /app

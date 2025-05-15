@@ -3,10 +3,30 @@ import time
 import wave
 import json
 import subprocess
+import psutil
+
 from vosk import Model, KaldiRecognizer
 from faster_whisper import WhisperModel
 from jiwer import wer, Compose, RemovePunctuation, ToLowerCase, RemoveWhiteSpace
 
+# === เตรียมวัดทรัพยากร ===
+process = psutil.Process(os.getpid())
+
+def measure_resource(fn):
+    start_time = time.time()
+    cpu_start = process.cpu_percent(interval=None)
+    mem_start = process.memory_info().rss / 1024 / 1024  # MB
+
+    result = fn()
+
+    cpu_end = process.cpu_percent(interval=None)
+    mem_end = process.memory_info().rss / 1024 / 1024  # MB
+    end_time = time.time()
+
+    latency = end_time - start_time
+    cpu_used = cpu_end
+    mem_used = mem_end - mem_start
+    return result, latency, cpu_used, mem_used
 
 # === เลือกไฟล์เสียง ===
 wav_files = [f for f in os.listdir(".") if f.endswith(".wav")]
@@ -27,7 +47,7 @@ if not os.path.exists(txt_file):
     print(f"❌ ไม่พบไฟล์ {txt_file} สำหรับ ground truth")
     exit()
 
-# === แปลงไฟล์ .wav เป็น PCM ด้วย ffmpeg ===
+# === แปลงไฟล์ .wav เป็น PCM ===
 print(f"🔄 แปลงไฟล์ {orig_wav} → PCM format...")
 subprocess.run([
     "ffmpeg", "-y", "-i", orig_wav,
@@ -39,43 +59,45 @@ subprocess.run([
 with open(txt_file, "r", encoding="utf-8") as f:
     ground_truth = f.read().strip().lower()
 
-# === โหลด Vosk Model ===
-vosk_model = Model("/models/vosk/model")
-wf = wave.open(converted_wav, "rb")
-audio_data = wf.readframes(wf.getnframes())
-rec = KaldiRecognizer(vosk_model, wf.getframerate())
-
-start_vosk = time.time()
-rec.AcceptWaveform(audio_data)
-vosk_result = rec.Result()
-end_vosk = time.time()
-
-vosk_text = json.loads(vosk_result)["text"]
-vosk_time = end_vosk - start_vosk
-
-# === Whisper Model ===
-whisper_model = WhisperModel("tiny.en", download_root="/models/whisper")
-start_whisper = time.time()
-segments, _ = whisper_model.transcribe(converted_wav)
-whisper_text = " ".join([seg.text for seg in segments])
-end_whisper = time.time()
-whisper_time = end_whisper - start_whisper
-
+# === ฟังก์ชัน normalize สำหรับ WER ===
 transform = Compose([
     RemovePunctuation(),
     ToLowerCase(),
     RemoveWhiteSpace(replace_by_space=True),
 ])
 
+# === รัน Vosk ===
+def run_vosk():
+    model = Model("/models/vosk/model")
+    wf = wave.open(converted_wav, "rb")
+    audio_data = wf.readframes(wf.getnframes())
+    rec = KaldiRecognizer(model, wf.getframerate())
+    rec.AcceptWaveform(audio_data)
+    result = rec.Result()
+    return json.loads(result)["text"]
+
+print("\n🧠 Running Vosk...")
+vosk_text, vosk_time, vosk_cpu, vosk_mem = measure_resource(run_vosk)
+
+# === รัน Whisper ===
+def run_whisper():
+    model = WhisperModel("tiny.en", download_root="/models/whisper")
+    segments, _ = model.transcribe(converted_wav)
+    return " ".join([seg.text for seg in segments])
+
+print("\n🧠 Running Whisper...")
+whisper_text, whisper_time, whisper_cpu, whisper_mem = measure_resource(run_whisper)
+
 # === แสดงผล ===
 print("\n🧾 Ground Truth:", ground_truth)
+
 print("\n🎙️ Whisper Output:", whisper_text.strip().lower())
-print("🕐 Whisper Latency: %.2f sec" % whisper_time)
-print("📉 Whisper WER: %.2f%%" % (wer(transform(ground_truth), transform(whisper_text)) * 100))
+print("🕐 Latency: %.2f sec | ⚙️ CPU: %.2f%% | 📦 RAM: %.2f MB" % (whisper_time, whisper_cpu, whisper_mem))
+print("📉 WER: %.2f%%" % (wer(transform(ground_truth), transform(whisper_text)) * 100))
 
 print("\n🎙️ Vosk Output:", vosk_text.strip().lower())
-print("🕐 Vosk Latency: %.2f sec" % vosk_time)
-print("📉 Vosk WER: %.2f%%" % (wer(transform(ground_truth), transform(vosk_text)) * 100))
+print("🕐 Latency: %.2f sec | ⚙️ CPU: %.2f%% | 📦 RAM: %.2f MB" % (vosk_time, vosk_cpu, vosk_mem))
+print("📉 WER: %.2f%%" % (wer(transform(ground_truth), transform(vosk_text)) * 100))
 
 # === ลบไฟล์แปลงชั่วคราว
 os.remove(converted_wav)
